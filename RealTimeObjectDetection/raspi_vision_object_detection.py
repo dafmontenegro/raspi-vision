@@ -22,7 +22,7 @@ def visualize(image, detection_result, fps):
     cv2.putText(image, f"{fps:.1f}", (21, 21), cv2.FONT_HERSHEY_PLAIN, _FONT_SIZE, _TEXT_COLOR, 1)
     return image
 
-def run(model, width, height, num_threads):
+def run(model, width, height):
     fps = 0.0
     counter = 0
     start_time = time.time()
@@ -30,7 +30,7 @@ def run(model, width, height, num_threads):
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    base_options = core.BaseOptions(file_name=model, use_coral=False, num_threads=num_threads)
+    base_options = core.BaseOptions(file_name=model, use_coral=False, num_threads=4)
     detection_options = processor.DetectionOptions(max_results=1, score_threshold=score_threshold, category_name_allowlist=["person"])
     options = vision.ObjectDetectorOptions(base_options=base_options, detection_options=detection_options)
     detector = vision.ObjectDetector.create_from_options(options)
@@ -52,4 +52,4 @@ def run(model, width, height, num_threads):
     cap.release()
 
 if __name__ == "__main__":
-    run("efficientdet_lite0.tflite", 1280, 720, 4)
+    run("efficientdet_lite0.tflite", 1280, 720)
