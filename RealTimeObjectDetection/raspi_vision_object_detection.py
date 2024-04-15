@@ -5,10 +5,9 @@ from tflite_support.task import core
 from tflite_support.task import vision
 from tflite_support.task import processor
 
-_FONT_SIZE = 1
-_TEXT_COLOR = (0, 0, 255)
 score_threshold = 0.7
-max_results = 3
+_TEXT_COLOR = (0, 0, 255)
+_FONT_SIZE = 1
 
 def visualize(image, detection_result, fps):
     for detection in detection_result.detections:
@@ -23,16 +22,16 @@ def visualize(image, detection_result, fps):
     cv2.putText(image, f"{fps:.1f}", (21, 21), cv2.FONT_HERSHEY_PLAIN, _FONT_SIZE, _TEXT_COLOR, 1)
     return image
 
-def run(model, camera_id, width, height, num_threads):
+def run(model, width, height, num_threads):
     fps = 0.0
     counter = 0
     start_time = time.time()
     fps_avg_frame_count = 10
-    cap = cv2.VideoCapture(camera_id)
+    cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     base_options = core.BaseOptions(file_name=model, use_coral=False, num_threads=num_threads)
-    detection_options = processor.DetectionOptions(max_results=max_results, score_threshold=score_threshold)
+    detection_options = processor.DetectionOptions(max_results=1, score_threshold=score_threshold, category_name_allowlist=["person"])
     options = vision.ObjectDetectorOptions(base_options=base_options, detection_options=detection_options)
     detector = vision.ObjectDetector.create_from_options(options)
     while cap.isOpened():
@@ -46,11 +45,11 @@ def run(model, camera_id, width, height, num_threads):
             fps = fps_avg_frame_count / (end_time - start_time)
             start_time = time.time()
         image = visualize(image, detection_result, fps)
+        cv2.imshow("Raspberry Pi Object Detector", image)
         if cv2.waitKey(1) == 27:
             break
-        cv2.imshow("Raspberry Pi Object Detector", image)
-    cap.release()
     cv2.destroyAllWindows()
+    cap.release()
 
 if __name__ == '__main__':
-  run("efficientdet_lite0.tflite", 0, 1280, 720, 4)
+  run("efficientdet_lite0.tflite", 1280, 720, 4)
