@@ -52,4 +52,4 @@ def run(model, width, height, num_threads):
     cap.release()
 
 if __name__ == "__main__":
-  run("efficientdet_lite0.tflite", 1280, 720, 4)
+    run("efficientdet_lite0.tflite", 1280, 720, 4)
