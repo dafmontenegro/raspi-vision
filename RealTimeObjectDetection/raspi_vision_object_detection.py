@@ -51,5 +51,5 @@ def run(model, width, height, num_threads):
     cv2.destroyAllWindows()
     cap.release()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   run("efficientdet_lite0.tflite", 1280, 720, 4)
