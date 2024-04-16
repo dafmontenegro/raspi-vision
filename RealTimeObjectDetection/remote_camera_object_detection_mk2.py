@@ -13,7 +13,7 @@ event_frames = []
 event_path = None
 last_detection = None
 app = Flask(__name__)
-score_threshold = 0.7
+score_threshold = 0.6
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -24,6 +24,7 @@ detector = vision.ObjectDetector.create_from_options(options)
 _, last_frame = cap.read()
 
 def visualize(image, detection_result):
+    global events
     global event_path
     global event_frames
     global last_detection
@@ -38,7 +39,6 @@ def visualize(image, detection_result):
         if not event_frames:
             hour, mins, day = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime).split("_")
             event_path = os.path.join("events", day, hour, f"{hour}{mins}{day}.mp4")
-            os.makedirs(os.path.dirname(event_path), exist_ok=True)
             print(f"NEW EVENT: {event_path}")
         last_detection = time.time()
         event_frames.append(image)
@@ -46,8 +46,9 @@ def visualize(image, detection_result):
         if last_detection and ((time.time() - last_detection) >= 30):
             if len(event_frames) >= 24:
                 events += 1
-                print(f"SAVE EVENT {events} ({int(len(event_frames)/24)} secs): {event_path}")
+                os.makedirs(os.path.dirname(event_path), exist_ok=True)
                 out = cv2.VideoWriter(event_path, cv2.VideoWriter_fourcc(*"mp4v"), 24, (1280, 720))
+                print(f"SAVE EVENT {events} ({int(len(event_frames)/24)} secs): {event_path}")
                 for event_frame in event_frames:
                     out.write(event_frame)
                 out.release()
