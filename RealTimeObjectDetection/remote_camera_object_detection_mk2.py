@@ -20,8 +20,9 @@ _, last_frame = cap.read()
 def visualize(image, detection_result, datetime_str):
     for detection in detection_result.detections:
         bbox = detection.bounding_box
-        start_point = bbox.origin_x, bbox.origin_y
-        cv2.rectangle(image, start_point, 3, (0, 0, 255), 3)
+        start_point = (int(bbox.origin_x), int(bbox.origin_y))
+        end_point = (int(bbox.origin_x + bbox.width), int(bbox.origin_y + bbox.height))
+        cv2.rectangle(image, start_point, end_point, (0, 0, 255), 3)
     cv2.putText(image, datetime_str , (21, 42), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
     return image
 
