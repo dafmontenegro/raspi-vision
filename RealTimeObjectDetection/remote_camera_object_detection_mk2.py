@@ -13,7 +13,7 @@ event_frames = []
 event_path = None
 last_detection = None
 app = Flask(__name__)
-score_threshold = 0.6
+score_threshold = 0.7
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -33,7 +33,7 @@ def visualize(image, detection_result):
         start_point = (int(bbox.origin_x), int(bbox.origin_y))
         end_point = (int(bbox.origin_x + bbox.width), int(bbox.origin_y + bbox.height))
         cv2.rectangle(image, start_point, end_point, (0, 0, 255), 3)
-    cv2.putText(image, time.strftime("%B/%d/%y %H:%M:%S", time_localtime), (21, 42), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+    cv2.putText(image, time.strftime("%B%d/%Y %H:%M:%S", time_localtime), (21, 42), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
     if detection_result.detections:
         if not event_frames:
             hour, mins, day = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime).split("_")
