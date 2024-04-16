@@ -30,7 +30,6 @@ def generate_frames():
     while cap.isOpened():
         frame = cv2.imencode(".jpg", last_frame)[1].tobytes()
         yield (b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
-    cv2.destroyAllWindows()
     cap.release()
 
 def main():
@@ -41,7 +40,6 @@ def main():
         detection_result = detector.detect(vision.TensorImage.create_from_array(rgb_image))
         datetime_str = time.strftime("%H:%M:%S %d/%m/%y", time.localtime())
         last_frame = visualize(image, detection_result, datetime_str)
-    cv2.destroyAllWindows()
     cap.release()
 
 @app.route("/")
