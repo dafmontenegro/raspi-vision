@@ -4,6 +4,7 @@ import time
 import shutil
 import logging
 import argparse
+import traceback
 import threading
 import RPi.GPIO as GPIO
 from flask import Flask, Response
@@ -80,35 +81,38 @@ class RealTimeObjectDetection:
         self.events = 0
 
     def guard(self, fps=24, max_detection_delay=30, event_check_interval=50):
-        self.led_rgb.blue()
-        while self.isOpened():
-            detections, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX)
-            if detections:
-                if not self.frame_buffer:
-                    hour, mins, day = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime).split("_")
-                    self.output_path = os.path.join(self.folder_name, day, hour, f"{hour}{mins}{day}.mp4")
-                self.last_detection_timestamp = time.time()
-                self.frame_buffer.append(self.frame)
-            else:
-                if self.last_detection_timestamp and ((time.time() - self.last_detection_timestamp) >= max_detection_delay):
-                    if len(self.frame_buffer) >= fps:
-                        self.events += 1
-                        os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
-                        out = cv2.VideoWriter(self.output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (self.frame_width, self.frame_height))
-                        print(f"SAVE EVENT #{self.events}: {int(len(self.frame_buffer)/24)} seconds {self.output_path}")
-                        for frame in self.frame_buffer:
-                            out.write(frame)
-                        out.release()
-                        if self.events >= event_check_interval:
-                            self.storage_manager.supervise_folder_capacity()
-                    self.last_detection_timestamp = None
-                    self.output_path = None
-                    self.frame_buffer = []
-                    self.led_rgb.blue()
-            if len(self.frame_buffer) >= fps:
-                self.led_rgb.red()
-            if cv2.waitKey(1) == 27:
-                self.close()
+        try:
+            self.led_rgb.blue()
+            while self.isOpened():
+                detections, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX)
+                if detections:
+                    if not self.frame_buffer:
+                        hour, mins, day = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime).split("_")
+                        self.output_path = os.path.join(self.folder_name, day, hour, f"{hour}{mins}{day}.mp4")
+                    self.last_detection_timestamp = time.time()
+                    self.frame_buffer.append(self.frame)
+                else:
+                    if self.last_detection_timestamp and ((time.time() - self.last_detection_timestamp) >= max_detection_delay):
+                        if len(self.frame_buffer) >= fps:
+                            self.events += 1
+                            os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
+                            out = cv2.VideoWriter(self.output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (self.frame_width, self.frame_height))
+                            print(f"SAVE EVENT #{self.events}: {int(len(self.frame_buffer)/24)} seconds {self.output_path}")
+                            for frame in self.frame_buffer:
+                                out.write(frame)
+                            out.release()
+                            if self.events >= event_check_interval:
+                                self.storage_manager.supervise_folder_capacity()
+                        self.last_detection_timestamp = None
+                        self.output_path = None
+                        self.frame_buffer = []
+                        self.led_rgb.blue()
+                if len(self.frame_buffer) >= fps:
+                    self.led_rgb.red()
+        except Exception as e:
+            print(f"ERROR: {e}")
+            traceback.print_exc()
+            self.close()
 
     def process_frame(self, color=(0, 0, 255), font_size=1, font_thickness=2, font=cv2.FONT_HERSHEY_SIMPLEX):
         frame = self.camera.frame()
@@ -160,33 +164,37 @@ class StorageManager:
             folder_to_delete = os.path.join(self.events_folder, min(os.listdir(self.events_folder)))
             events_folder_size -= StorageManager.delete_folder(folder_to_delete)
 
-app = Flask(__name__)
-folder_name = "events"
-remote_camera = RealTimeObjectDetection(1280, 720, 0, "efficientdet_lite0.tflite", 4, 0.5, 3, ["person", "dog", "cat"], folder_name, 21)
-
-def real_time_transmission():
-    while remote_camera.isOpened():
-        frame = cv2.imencode(".jpg", remote_camera.frame)[1].tobytes()
-        yield (b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
-
-@app.route("/")
-def stream_video():
-    return Response(real_time_transmission(), mimetype="multipart/x-mixed-replace; boundary=frame")
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--folder-name", default="events", help="Name of the folder to store events (default: 'events')")
     parser.add_argument("--reset-events", action="store_true", help="Reset events folder")
     args = parser.parse_args()
     try:
+        folder_name = args.folder_name
         if args.reset_events:
-            shutil.rmtree("events")
+            StorageManager.delete_folder(folder_name)
             print(f"STORAGE: 'events' was deleted")
         os.makedirs("events", exist_ok=True)
-        flask_thread = threading.Thread(target=app.run, kwargs={"host": "0.0.0.0", "port": 80, "threaded": True})
-        flask_thread.start()
-        remote_camera.guard(24, 30, 50)
+
+        remote_camera = RealTimeObjectDetection(1280, 720, 0, "efficientdet_lite0.tflite", 4, 0.5, 3, ["person", "dog", "cat"], folder_name, 21)
+        guard_thread = threading.Thread(target=remote_camera.guard, args=(24, 30, 50))
+        guard_thread.start()
+
+        app = Flask(__name__)
+
+        def real_time_transmission():
+            while remote_camera.isOpened():
+                frame = cv2.imencode(".jpg", remote_camera.frame)[1].tobytes()
+                yield (b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+
+        @app.route("/")
+        def stream_video():
+            return Response(real_time_transmission(), mimetype="multipart/x-mixed-replace; boundary=frame")
+        
+        app.run(host="0.0.0.0", port=80, threaded=True)   
     except Exception as e:
         print(f"ERROR: {e}")
+        traceback.print_exc()
         remote_camera.close()
         GPIO.cleanup()
     finally:
