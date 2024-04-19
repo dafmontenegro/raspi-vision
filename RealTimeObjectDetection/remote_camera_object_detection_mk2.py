@@ -4,13 +4,12 @@ import time
 import shutil
 import logging
 import argparse
-import traceback
 import threading
 import RPi.GPIO as GPIO
-from flask import Flask, Response
 from tflite_support.task import core
 from tflite_support.task import vision
 from tflite_support.task import processor
+from flask import Flask, Response, send_file
 
 class LEDRGB:
     colors = {
@@ -24,8 +23,8 @@ class LEDRGB:
         "off": (0, 0, 0)
     }
 
-    def __init__(self, red_led=33, green_led=35, blue_led=37):
-        GPIO.setmode(GPIO.BOARD)
+    def __init__(self, red_led, green_led, blue_led):
+        GPIO.setmode(GPIO.BCM)
         self.red_led = red_led
         self.green_led = green_led
         self.blue_led = blue_led
@@ -40,7 +39,22 @@ class LEDRGB:
         GPIO.output(self.blue_led, color[2])
 
     def __getattr__(self, color_name):
-        return lambda: self._set_color(color_name.lower())
+        return lambda: self._set_color(color_name)
+
+class LEDSRGB:
+    def __init__(self, leds):
+        self.leds = [LEDRGB(*led) for led in leds]
+    
+    def set_color(self, color_names):
+        if isinstance(color_names, str):
+            for i, led in enumerate(self.leds):
+                getattr(led, color_names)()
+        elif isinstance(color_names, list) and len(color_names) == len(self.leds):
+            for (led, color) in zip(self.leds, color_names):
+                getattr(led, color)()
+    
+    def __getattr__(self, color_name):
+        return lambda: self.set_color(color_name)
 
 class ObjectDetector:
     def __init__(self, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.5, max_results=1, category_name_allowlist=["person"]):
@@ -64,57 +78,64 @@ class Camera:
         return frame
 
 class RealTimeObjectDetection:
-    def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.5, 
-                 max_results=1, category_name_allowlist=["person"], folder_name="events", storage_capacity=21):
+    def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.5, max_results=1, 
+                 category_name_allowlist=["person"], folder_name="events", storage_capacity=32, led_pines=[(13, 19, 26), (21, 20, 16)], fps_frame_count= 30):
         self.frame_width = frame_width
         self.frame_height = frame_height
-        self.led_rgb = LEDRGB(33, 35, 37)
         self.camera = Camera(frame_width, frame_height, camera_number)
+        self.frame = self.camera.frame()
         self.object_detector = ObjectDetector(model_name, num_threads, score_threshold, max_results, category_name_allowlist)
+        self.folder_name = folder_name
         self.storage_manager = StorageManager(folder_name, storage_capacity)
         self.storage_manager.supervise_folder_capacity()
+        self.leds_rgb = LEDSRGB(led_pines)
+        self.fps_frame_count = fps_frame_count
         self.last_detection_timestamp = None
-        self.frame = self.camera.frame()
-        self.folder_name = folder_name
-        self.output_path = None
         self.frame_buffer = []
+        self.frame_times = []
+        self.output = {}
         self.events = 0
+        self.fps = 24
 
-    def guard(self, fps=24, max_detection_delay=30, event_check_interval=50):
+    def guard(self, min_video_duration=3, max_detection_delay=10, event_check_interval=10):
         try:
-            self.led_rgb.blue()
+            self.leds_rgb.set_color(["off", "green"])
             while self.isOpened():
                 detections, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX)
                 if detections:
                     if not self.frame_buffer:
-                        hour, mins, day = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime).split("_")
-                        self.output_path = os.path.join(self.folder_name, day, hour, f"{hour}{mins}{day}.mp4")
+                        self.output["file_name"] = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime)
+                        self.output["hour"], self.output["mins"], self.output["day"] = self.output["file_name"].split("_")
+                        self.output["path"] = os.path.join(self.folder_name, self.output["day"], self.output["hour"], f"{self.output['file_name']}.mp4")
                     self.last_detection_timestamp = time.time()
                     self.frame_buffer.append(self.frame)
                 else:
                     if self.last_detection_timestamp and ((time.time() - self.last_detection_timestamp) >= max_detection_delay):
-                        if len(self.frame_buffer) >= fps:
+                        if len(self.frame_buffer) >= self.fps*min_video_duration:
                             self.events += 1
-                            os.makedirs(os.path.dirname(self.output_path), exist_ok=True)
-                            out = cv2.VideoWriter(self.output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (self.frame_width, self.frame_height))
-                            print(f"SAVE EVENT #{self.events}: {int(len(self.frame_buffer)/24)} seconds {self.output_path}")
+                            os.makedirs(os.path.dirname(self.output["path"]), exist_ok=True)
+                            out = cv2.VideoWriter(self.output["path"], cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (self.frame_width, self.frame_height))
+                            logging.warning(f"EVENT: {int(len(self.frame_buffer)/self.fps)} seconds {self.output['path']}")
                             for frame in self.frame_buffer:
                                 out.write(frame)
                             out.release()
-                            if self.events >= event_check_interval:
-                                self.storage_manager.supervise_folder_capacity()
+                            if self.events % event_check_interval == 0:
+                                storage_thread = threading.Thread(target=self.storage_manager.supervise_folder_capacity)
+                                storage_thread.start()
+                        self.leds_rgb.set_color(["off", "green"])
                         self.last_detection_timestamp = None
-                        self.output_path = None
                         self.frame_buffer = []
-                        self.led_rgb.blue()
-                if len(self.frame_buffer) >= fps:
-                    self.led_rgb.red()
+                        self.output = {}
+                if len(self.frame_buffer) >= self.fps:
+                    self.leds_rgb.red()
         except Exception as e:
-            print(f"ERROR: {e}")
-            traceback.print_exc()
+            logging.error(e, exc_info=True)
+            GPIO.cleanup()
             self.close()
+            os._exit(0)
 
     def process_frame(self, color=(0, 0, 255), font_size=1, font_thickness=2, font=cv2.FONT_HERSHEY_SIMPLEX):
+        start_time = time.time()
         frame = self.camera.frame()
         time_localtime = time.localtime()
         detections = self.object_detector.detections(frame)
@@ -127,7 +148,12 @@ class RealTimeObjectDetection:
             cv2.rectangle(frame, start_point, end_point, color, font_thickness)
             cv2.putText(frame, category_name, text_position, font, font_size, color, font_thickness)
         cv2.putText(frame, time.strftime("%B%d/%Y %H:%M:%S", time_localtime), (21, 42), cv2.FONT_HERSHEY_SIMPLEX, font_size, color, font_thickness)
+        self.frame_times.append(time.time() - start_time)
         self.frame = frame
+        if self.fps_frame_count == len(self.frame_times):
+            average_frame_time = sum(self.frame_times) / len(self.frame_times)
+            self.fps = round(1/average_frame_time, 2)
+            self.frame_times = []
         return detections, time_localtime
 
     def isOpened(self):
@@ -137,7 +163,7 @@ class RealTimeObjectDetection:
         self.camera.video_capture.release()
 
 class StorageManager:
-    def __init__(self, events_folder="events", storage_capacity=21):
+    def __init__(self, events_folder="events", storage_capacity=32):
         self.events_folder = events_folder
         self.storage_capacity = storage_capacity
 
@@ -154,12 +180,12 @@ class StorageManager:
     def delete_folder(folder_path):
         folder_size = StorageManager.folder_size_gb(folder_path)
         shutil.rmtree(folder_path)
-        print(f"STORAGE: '{folder_path}' was deleted (-{folder_size:.4f} GB)")
+        logging.warning(f"STORAGE: '{folder_path}' was deleted (-{folder_size:.4f} GB)")
         return folder_size
 
     def supervise_folder_capacity(self):
         events_folder_size = StorageManager.folder_size_gb(self.events_folder)
-        print(f"STORAGE: '{self.events_folder}' is ({events_folder_size:.4f} GB)")
+        logging.info(f"STORAGE: '{self.events_folder}' is ({events_folder_size:.4f} GB)")
         while events_folder_size > self.storage_capacity:
             folder_to_delete = os.path.join(self.events_folder, min(os.listdir(self.events_folder)))
             events_folder_size -= StorageManager.delete_folder(folder_to_delete)
@@ -167,34 +193,67 @@ class StorageManager:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--folder-name", default="events", help="Name of the folder to store events (default: 'events')")
+    parser.add_argument("--log-file", default="logfile.log", help="Name of the log file (default: 'logfile.log')")
     parser.add_argument("--reset-events", action="store_true", help="Reset events folder")
+    parser.add_argument("--reset-logs", action="store_true", help="Reset log file")
     args = parser.parse_args()
     try:
+        log_file = args.log_file
+        if args.reset_logs:
+            with open(log_file, "w") as file:
+                file.write(f"{log_file.upper()}\n")
+        logging.basicConfig(filename=log_file, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%B%d/%Y %H:%M:%S")
+
         folder_name = args.folder_name
         if args.reset_events:
             StorageManager.delete_folder(folder_name)
-            print(f"STORAGE: 'events' was deleted")
         os.makedirs("events", exist_ok=True)
 
-        remote_camera = RealTimeObjectDetection(1280, 720, 0, "efficientdet_lite0.tflite", 4, 0.5, 3, ["person", "dog", "cat"], folder_name, 21)
-        guard_thread = threading.Thread(target=remote_camera.guard, args=(24, 30, 50))
+        remote_camera = RealTimeObjectDetection(
+            frame_width=1280,
+            frame_height=720,
+            camera_number=0,
+            model_name="efficientdet_lite0.tflite",
+            num_threads=4,
+            score_threshold=0.5,
+            max_results=3, 
+            category_name_allowlist=["person", "umbrella", "dog", "cat"],
+            folder_name=folder_name,
+            storage_capacity=32,
+            led_pines=[(13, 19, 26), (21, 20, 16)],
+            fps_frame_count=30
+        )
+
+        guard_thread = threading.Thread(target=remote_camera.guard, kwargs={
+            "min_video_duration": 3,
+            "max_detection_delay": 10,
+            "event_check_interval": 10
+        })
         guard_thread.start()
 
         app = Flask(__name__)
 
-        def real_time_transmission():
-            while remote_camera.isOpened():
-                frame = cv2.imencode(".jpg", remote_camera.frame)[1].tobytes()
-                yield (b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+        def real_time_transmission(duration=600):
+            start_time = time.time()
+            while time.time() - start_time < duration:
+                cv2.circle(remote_camera.frame, (1238, 21), 12, (0, 255, 0), -1)
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + cv2.imencode(".jpg", remote_camera.frame)[1].tobytes() + b"\r\n")
+            cv2.circle(remote_camera.frame, (1238, 21), 12, (0, 0, 255), -1)
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + cv2.imencode(".jpg", remote_camera.frame)[1].tobytes() + b"\r\n")
 
         @app.route("/")
         def stream_video():
             return Response(real_time_transmission(), mimetype="multipart/x-mixed-replace; boundary=frame")
         
+        @app.route("/logs")
+        def get_logs():
+            with open(log_file, "r") as file:
+                logs = file.read()
+            return Response(logs, mimetype="text/plain")
+
         app.run(host="0.0.0.0", port=80, threaded=True)   
     except Exception as e:
-        print(f"ERROR: {e}")
-        traceback.print_exc()
+        logging.error(e, exc_info=True)
         remote_camera.close()
         GPIO.cleanup()
     finally:
