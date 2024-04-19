@@ -57,7 +57,7 @@ class LEDSRGB:
         return lambda: self.set_color(color_name)
 
 class ObjectDetector:
-    def __init__(self, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.5, max_results=1, category_name_allowlist=["person"]):
+    def __init__(self, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.3, max_results=1, category_name_allowlist=["person"]):
         base_options = core.BaseOptions(file_name=model_name, use_coral=False, num_threads=num_threads)
         detection_options = processor.DetectionOptions(max_results=max_results, score_threshold=score_threshold, category_name_allowlist=category_name_allowlist)
         options = vision.ObjectDetectorOptions(base_options=base_options, detection_options=detection_options)
@@ -78,7 +78,7 @@ class Camera:
         return frame
 
 class RealTimeObjectDetection:
-    def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.5, max_results=1, 
+    def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.3, max_results=1, 
                  category_name_allowlist=["person"], folder_name="events", storage_capacity=32, led_pines=[(13, 19, 26), (21, 20, 16)], fps_frame_count= 30):
         self.frame_width = frame_width
         self.frame_height = frame_height
@@ -215,7 +215,7 @@ if __name__ == "__main__":
             camera_number=0,
             model_name="efficientdet_lite0.tflite",
             num_threads=4,
-            score_threshold=0.5,
+            score_threshold=0.3,
             max_results=3, 
             category_name_allowlist=["person", "umbrella", "dog", "cat"],
             folder_name=folder_name,
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         )
 
         guard_thread = threading.Thread(target=remote_camera.guard, kwargs={
-            "min_video_duration": 3,
+            "min_video_duration": 1,
             "max_detection_delay": 10,
             "event_check_interval": 10
         })
@@ -233,11 +233,14 @@ if __name__ == "__main__":
 
         app = Flask(__name__)
 
-        def real_time_transmission(duration=600):
+        def real_time_transmission(duration=300):
             start_time = time.time()
-            while time.time() - start_time < duration:
-                cv2.circle(remote_camera.frame, (1238, 21), 12, (0, 255, 0), -1)
+            time_seconds = int(time.time())
+            while time_seconds - start_time < duration:
+                if time_seconds % 2:
+                    cv2.circle(remote_camera.frame, (1238, 21), 12, (0, 255, 0), -1)
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + cv2.imencode(".jpg", remote_camera.frame)[1].tobytes() + b"\r\n")
+                time_seconds = int(time.time())
             cv2.circle(remote_camera.frame, (1238, 21), 12, (0, 0, 255), -1)
             yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + cv2.imencode(".jpg", remote_camera.frame)[1].tobytes() + b"\r\n")
 
