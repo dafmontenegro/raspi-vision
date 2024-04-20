@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Events</title>
+</head>
+<body>
+    <h1>EVENTS</h1>
+    {% for day in events %}
+        <h2>{{ day.date }}</h2>
+        <ul>
+            {% for hour in day.hours %}
+                <li>
+                    <h3>{{ hour.time }}</h3>
+                    <ul>
+                        {% for video in hour.videos %}
+                            <li><a href="/play/{{ day.date }}/{{ hour.time }}/{{ video.path }}">[video]</a> {{ video.name }}</li>
+                            </br>
+                        {% endfor %}
+                    </ul>
+                </li>
+            {% endfor %}
+        </ul>
+    {% endfor %}
+</body>
+</html>
