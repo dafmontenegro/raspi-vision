@@ -78,8 +78,8 @@ class Camera:
         return frame
 
 class RealTimeObjectDetection:
-    def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.3, max_results=1, 
-                 category_name_allowlist=["person"], folder_name="events", storage_capacity=32, led_pines=[(13, 19, 26), (21, 20, 16)], fps_frame_count= 30):
+    def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.3, max_results=1, category_name_allowlist=["person"], 
+                 folder_name="events", storage_capacity=32, led_pines=[(13, 19, 26), (21, 20, 16)], fps_frame_count= 30, safe_zone=((0, 0), (1280, 720))):
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.camera = Camera(frame_width, frame_height, camera_number)
@@ -89,6 +89,7 @@ class RealTimeObjectDetection:
         self.storage_manager = StorageManager(folder_name, storage_capacity)
         self.storage_manager.supervise_folder_capacity()
         self.leds_rgb = LEDSRGB(led_pines)
+        self.safe_zone_start, self.safe_zone_end = safe_zone
         self.fps_frame_count = fps_frame_count
         self.last_detection_timestamp = None
         self.frame_buffer = []
@@ -97,12 +98,12 @@ class RealTimeObjectDetection:
         self.events = 0
         self.fps = 24
 
-    def guard(self, min_video_duration=3, max_detection_delay=10, event_check_interval=10):
+    def guard(self, min_video_duration=3, max_detection_delay=10, event_check_interval=10, safe_zone=False):
         try:
             self.leds_rgb.set_color(["off", "green"])
             while self.isOpened():
-                detections, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX)
-                if detections:
+                security_breach, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX, safe_zone)
+                if security_breach:
                     if not self.frame_buffer:
                         self.output["file_name"] = time.strftime("%B%d_%Hhr_%Mmin%Ssec", time_localtime)
                         self.output["day"], self.output["hours"], self.output["mins"] = self.output["file_name"].split("_")
@@ -137,28 +138,39 @@ class RealTimeObjectDetection:
         if self.events % event_check_interval == 0:
             storage_thread = threading.Thread(target=self.storage_manager.supervise_folder_capacity)
             storage_thread.start()
+    
+    def _safe_zone_invasion(self, rect_start, rect_end):
+        if self.safe_zone_start[0] > rect_end[0] or self.safe_zone_end[0] < rect_start[0]:
+            return False
+        if self.safe_zone_start[1] > rect_end[1] or self.safe_zone_end[1] < rect_start[1]:
+            return False
+        return True
 
-    def process_frame(self, color=(0, 0, 255), font_size=1, font_thickness=2, font=cv2.FONT_HERSHEY_SIMPLEX):
+    def process_frame(self, color=(0, 0, 255), font_size=1, font_thickness=2, font=cv2.FONT_HERSHEY_SIMPLEX, safe_zone=False):
+        security_breach = False
         start_time = time.time()
         frame = self.camera.frame()
         time_localtime = time.localtime()
         detections = self.object_detector.detections(frame)
         for detection in detections:
             box = detection.bounding_box
-            start_point = box.origin_x, box.origin_y
-            end_point = box.origin_x+box.width, box.origin_y+box.height
+            rect_start = (box.origin_x, box.origin_y)
+            rect_end = (box.origin_x+box.width, box.origin_y+box.height)
             category_name = detection.categories[0].category_name
             text_position = (7+box.origin_x, 21+box.origin_y)
-            cv2.rectangle(frame, start_point, end_point, color, font_thickness)
             cv2.putText(frame, category_name, text_position, font, font_size, color, font_thickness)
+            cv2.rectangle(frame, rect_start, rect_end, color, font_thickness)
+            security_breach = self._safe_zone_invasion(rect_start, rect_end)
         cv2.putText(frame, time.strftime("%B%d/%Y %H:%M:%S", time_localtime), (21, 42), cv2.FONT_HERSHEY_SIMPLEX, font_size, color, font_thickness)
-        self.frame_times.append(time.time() - start_time)
+        if safe_zone:
+            cv2.rectangle(frame, self.safe_zone_start, self.safe_zone_end, (0, 255, 255), font_thickness)
         self.frame = frame
+        self.frame_times.append(time.time() - start_time)
         if self.fps_frame_count == len(self.frame_times):
             average_frame_time = sum(self.frame_times) / len(self.frame_times)
             self.fps = round(1/average_frame_time, 2)
             self.frame_times = []
-        return detections, time_localtime
+        return security_breach, time_localtime
 
     def isOpened(self):
         return self.camera.video_capture.isOpened()
@@ -221,17 +233,19 @@ if __name__ == "__main__":
             num_threads=4,
             score_threshold=0.3,
             max_results=3, 
-            category_name_allowlist=["person", "umbrella", "dog", "cat"],
+            category_name_allowlist=["person", "umbrella"],
             folder_name=folder_name,
             storage_capacity=32,
             led_pines=[(13, 19, 26), (21, 20, 16)],
-            fps_frame_count=30
+            fps_frame_count=30,
+            safe_zone=((0, 360), (1280, 720))
         )
 
         guard_thread = threading.Thread(target=remote_camera.guard, kwargs={
             "min_video_duration": 1,
             "max_detection_delay": 10,
-            "event_check_interval": 10
+            "event_check_interval": 10,
+            "safe_zone": True
         })
         guard_thread.start()
 
@@ -260,6 +274,7 @@ if __name__ == "__main__":
         @app.route("/events/")
         def get_events():
             days = []
+            h1 = "EVENTS"
             for day in sorted(os.listdir(folder_name)):
                 day_path = os.path.join(folder_name, day)
                 day_info = {"date": day, "hours": []}
@@ -271,11 +286,17 @@ if __name__ == "__main__":
                         hour_info["videos"].append({"name": video_name, "path": video})
                     day_info["hours"].append(hour_info )
                 days.append(day_info)
-            return render_template("events.html", events=days)
+            if not days:
+                h1 = "NO EVENTS AVAIBLE"
+            return render_template("events.html", events=days, h1=h1)
         
         @app.route("/play/<path:video_path>")
         def get_video(video_path):
-            return send_file(os.path.join(folder_name, video_path), mimetype="video/mp4")
+            video_path = os.path.join(folder_name, video_path)
+            if os.path.exists(video_path):
+                return send_file(video_path, mimetype="video/mp4")
+            else:
+                return "Video not found."
 
         app.run(host="0.0.0.0", port=80, threaded=True)   
     except Exception as e:
