@@ -9,7 +9,7 @@ import RPi.GPIO as GPIO
 from tflite_support.task import core
 from tflite_support.task import vision
 from tflite_support.task import processor
-from flask import Flask, Response, send_file
+from flask import Flask, Response, render_template, send_file
 
 class LEDRGB:
     colors = {
@@ -104,24 +104,15 @@ class RealTimeObjectDetection:
                 detections, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX)
                 if detections:
                     if not self.frame_buffer:
-                        self.output["file_name"] = time.strftime("%Hhr_%Mmin%Ssec_%B%d", time_localtime)
-                        self.output["hour"], self.output["mins"], self.output["day"] = self.output["file_name"].split("_")
-                        self.output["path"] = os.path.join(self.folder_name, self.output["day"], self.output["hour"], f"{self.output['file_name']}.mp4")
+                        self.output["file_name"] = time.strftime("%B%d_%Hhr_%Mmin%Ssec", time_localtime)
+                        self.output["day"], self.output["hours"], self.output["mins"] = self.output["file_name"].split("_")
+                        self.output["path"] = os.path.join(self.folder_name, self.output["day"], self.output["hours"], f"{self.output['file_name']}.mp4")
                     self.last_detection_timestamp = time.time()
                     self.frame_buffer.append(self.frame)
                 else:
                     if self.last_detection_timestamp and ((time.time() - self.last_detection_timestamp) >= max_detection_delay):
                         if len(self.frame_buffer) >= self.fps*min_video_duration:
-                            self.events += 1
-                            os.makedirs(os.path.dirname(self.output["path"]), exist_ok=True)
-                            out = cv2.VideoWriter(self.output["path"], cv2.VideoWriter_fourcc(*"mp4v"), self.fps, (self.frame_width, self.frame_height))
-                            logging.warning(f"EVENT: {int(len(self.frame_buffer)/self.fps)} seconds {self.output['path']}")
-                            for frame in self.frame_buffer:
-                                out.write(frame)
-                            out.release()
-                            if self.events % event_check_interval == 0:
-                                storage_thread = threading.Thread(target=self.storage_manager.supervise_folder_capacity)
-                                storage_thread.start()
+                            self.save_frame_buffer(self.output["path"], event_check_interval)
                         self.leds_rgb.set_color(["off", "green"])
                         self.last_detection_timestamp = None
                         self.frame_buffer = []
@@ -133,6 +124,19 @@ class RealTimeObjectDetection:
             GPIO.cleanup()
             self.close()
             os._exit(0)
+    
+    def save_frame_buffer(self, path, event_check_interval=10):
+        output_seconds = int(len(self.frame_buffer)/self.fps)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"avc1"), self.fps, (self.frame_width, self.frame_height))
+        logging.warning(f"EVENT: {output_seconds} seconds {path}")
+        for frame in self.frame_buffer:
+            out.write(frame)
+        out.release()
+        self.events += 1
+        if self.events % event_check_interval == 0:
+            storage_thread = threading.Thread(target=self.storage_manager.supervise_folder_capacity)
+            storage_thread.start()
 
     def process_frame(self, color=(0, 0, 255), font_size=1, font_thickness=2, font=cv2.FONT_HERSHEY_SIMPLEX):
         start_time = time.time()
@@ -248,11 +252,30 @@ if __name__ == "__main__":
         def stream_video():
             return Response(real_time_transmission(), mimetype="multipart/x-mixed-replace; boundary=frame")
         
-        @app.route("/logs")
+        @app.route("/logs/")
         def get_logs():
             with open(log_file, "r") as file:
-                logs = file.read()
-            return Response(logs, mimetype="text/plain")
+                return Response(file.read(), mimetype="text/plain")
+        
+        @app.route("/events/")
+        def get_events():
+            days = []
+            for day in sorted(os.listdir(folder_name)):
+                day_path = os.path.join(folder_name, day)
+                day_info = {"date": day, "hours": []}
+                for hour in sorted(os.listdir(day_path)):
+                    hour_path = os.path.join(day_path, hour)
+                    hour_info  = {"time": hour, "videos": []}
+                    for video in sorted(os.listdir(hour_path)):
+                        video_name = "".join(video.split("_")[1:]).replace(".mp4", "")
+                        hour_info["videos"].append({"name": video_name, "path": video})
+                    day_info["hours"].append(hour_info )
+                days.append(day_info)
+            return render_template("events.html", events=days)
+        
+        @app.route("/play/<path:video_path>")
+        def get_video(video_path):
+            return send_file(os.path.join(folder_name, video_path), mimetype="video/mp4")
 
         app.run(host="0.0.0.0", port=80, threaded=True)   
     except Exception as e:
