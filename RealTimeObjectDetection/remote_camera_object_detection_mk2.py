@@ -231,12 +231,12 @@ if __name__ == "__main__":
             camera_number=0,
             model_name="efficientdet_lite0.tflite",
             num_threads=4,
-            score_threshold=0.3,
+            score_threshold=0.5,
             max_results=3, 
             category_name_allowlist=["person", "umbrella"],
             folder_name=folder_name,
             storage_capacity=32,
-            led_pines=[(13, 19, 26), (21, 20, 16)],
+            led_pines=[(13, 19, 26), (16, 20, 21)],
             fps_frame_count=30,
             safe_zone=((0, 360), (1280, 720))
         )
