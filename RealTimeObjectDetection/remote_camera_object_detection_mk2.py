@@ -56,6 +56,32 @@ class LEDSRGB:
     def __getattr__(self, color_name):
         return lambda: self.set_color(color_name)
 
+class Buzzer:
+    def __init__(self, pin=12, frequency=5000, duty_cycle=50):
+        self.pin = pin
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(self.pin, GPIO.OUT)
+        self.frequency = frequency
+        self.pwm = GPIO.PWM(self.pin, self.frequency)
+        self.duty_cycle = duty_cycle
+        self.active = False
+
+    def auto_stop(self, cycles=3, duration=0.1):
+        if not self.active:
+            self.active = True
+            for _ in range(cycles):
+                self.start()
+                time.sleep(duration)
+                self.stop()
+                time.sleep(duration)
+            self.active = False
+    
+    def start(self):
+        self.pwm.start(self.duty_cycle)
+    
+    def stop(self):
+        self.pwm.stop()
+
 class ObjectDetector:
     def __init__(self, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.3, max_results=1, category_name_allowlist=["person"]):
         base_options = core.BaseOptions(file_name=model_name, use_coral=False, num_threads=num_threads)
@@ -79,7 +105,7 @@ class Camera:
 
 class RealTimeObjectDetection:
     def __init__(self, frame_width=1280, frame_height=720, camera_number=0, model_name="efficientdet_lite0.tflite", num_threads=4, score_threshold=0.3, max_results=1, category_name_allowlist=["person"], 
-                 folder_name="events", storage_capacity=32, led_pines=[(13, 19, 26), (21, 20, 16)], fps_frame_count= 30, safe_zone=((0, 0), (1280, 720))):
+                 folder_name="events", storage_capacity=32, led_pines=[(13, 19, 26), (21, 20, 16)], pin_buzzer=12, frequency=5000, duty_cycle=50, fps_frame_count= 30, safe_zone=((0, 0), (1280, 720))):
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.camera = Camera(frame_width, frame_height, camera_number)
@@ -89,6 +115,7 @@ class RealTimeObjectDetection:
         self.storage_manager = StorageManager(folder_name, storage_capacity)
         self.storage_manager.supervise_folder_capacity()
         self.leds_rgb = LEDSRGB(led_pines)
+        self.buzzer = Buzzer(pin_buzzer, frequency, duty_cycle)
         self.safe_zone_start, self.safe_zone_end = safe_zone
         self.fps_frame_count = fps_frame_count
         self.last_detection_timestamp = None
@@ -98,8 +125,9 @@ class RealTimeObjectDetection:
         self.events = 0
         self.fps = 24
 
-    def guard(self, min_video_duration=3, max_detection_delay=10, event_check_interval=10, safe_zone=False):
+    def guard(self, min_video_duration=1, max_detection_delay=10, event_check_interval=10, safe_zone=False):
         try:
+            self.buzzer.auto_stop()
             self.leds_rgb.set_color(["off", "green"])
             while self.isOpened():
                 security_breach, time_localtime = self.process_frame((0, 0, 255), 1, 2, cv2.FONT_HERSHEY_SIMPLEX, safe_zone)
@@ -108,6 +136,10 @@ class RealTimeObjectDetection:
                         self.output["file_name"] = time.strftime("%B%d_%Hhr_%Mmin%Ssec", time_localtime)
                         self.output["day"], self.output["hours"], self.output["mins"] = self.output["file_name"].split("_")
                         self.output["path"] = os.path.join(self.folder_name, self.output["day"], self.output["hours"], f"{self.output['file_name']}.mp4")
+                    elif len(self.frame_buffer) == int(self.fps):
+                        buzzer_thread = threading.Thread(target=self.buzzer.auto_stop)
+                        buzzer_thread.start()
+                        self.leds_rgb.red()
                     self.last_detection_timestamp = time.time()
                     self.frame_buffer.append(self.frame)
                 else:
@@ -118,8 +150,6 @@ class RealTimeObjectDetection:
                         self.last_detection_timestamp = None
                         self.frame_buffer = []
                         self.output = {}
-                if len(self.frame_buffer) >= self.fps:
-                    self.leds_rgb.red()
         except Exception as e:
             logging.error(e, exc_info=True)
             GPIO.cleanup()
@@ -233,12 +263,15 @@ if __name__ == "__main__":
             num_threads=4,
             score_threshold=0.5,
             max_results=3, 
-            category_name_allowlist=["person", "umbrella"],
+            category_name_allowlist=["person", "dog", "cat", "umbrella"],
             folder_name=folder_name,
             storage_capacity=32,
             led_pines=[(13, 19, 26), (16, 20, 21)],
+            pin_buzzer=12,
+            frequency=5000,
+            duty_cycle=50,
             fps_frame_count=30,
-            safe_zone=((0, 360), (1280, 720))
+            safe_zone=((0, 180), (1280, 720))
         )
 
         guard_thread = threading.Thread(target=remote_camera.guard, kwargs={
