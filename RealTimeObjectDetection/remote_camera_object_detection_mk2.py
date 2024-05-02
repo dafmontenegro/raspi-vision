@@ -125,7 +125,7 @@ class RealTimeObjectDetection:
         self.events = 0
         self.fps = 24
 
-    def guard(self, min_video_duration=1, max_detection_delay=10, event_check_interval=10, safe_zone=False):
+    def guard(self, min_video_duration=1, max_video_duration=60, max_detection_delay=10, event_check_interval=10, safe_zone=False):
         try:
             self.buzzer.auto_stop()
             self.leds_rgb.set_color(["off", "green"])
@@ -150,6 +150,8 @@ class RealTimeObjectDetection:
                         self.last_detection_timestamp = None
                         self.frame_buffer = []
                         self.output = {}
+                    elif len(self.frame_buffer) >= self.fps*max_video_duration:
+                        self.save_frame_buffer(self.output["path"], event_check_interval)
         except Exception as e:
             logging.error(e, exc_info=True)
             GPIO.cleanup()
@@ -276,6 +278,7 @@ if __name__ == "__main__":
 
         guard_thread = threading.Thread(target=remote_camera.guard, kwargs={
             "min_video_duration": 1,
+            "max_video_duration": 60,
             "max_detection_delay": 10,
             "event_check_interval": 10,
             "safe_zone": True
